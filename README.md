@@ -71,6 +71,7 @@ pip install -r requirements.txt
 Notes:
 
 - `accelerate` is included because current `sentence-transformers` fine-tuning uses the Hugging Face trainer stack.
+- `faiss-cpu` is included as an optional vector-index backend. On Mac this is CPU-only, which is fine for this repo size.
 - If `hnswlib` fails to build, run `xcode-select --install`.
 - If MPS is unstable on your machine, add `--device cpu` to the training and evaluation commands.
 
@@ -116,6 +117,37 @@ Outputs:
 - `indices/quora_hnsw.index`
 - `indices/quora_hnsw_metadata.json`
 - `indices/id_mapping.csv`
+
+### Optional: build a FAISS index instead
+
+The repo still defaults to `hnswlib`, but you can now build a FAISS index too. The current FAISS backend uses `IndexFlatIP`, which is exact inner-product search over normalized embeddings. That makes it a clean cosine-similarity backend for this project.
+
+```bash
+python src/build_index.py \
+  --index_backend faiss \
+  --space ip \
+  --index_file indices/quora_faiss.index \
+  --metadata_file indices/quora_faiss_metadata.json \
+  --mapping_file indices/id_mapping_faiss.csv
+```
+
+Then use the matching index for evaluation and search:
+
+```bash
+python src/evaluate.py \
+  --index_file indices/quora_faiss.index \
+  --index_metadata_file indices/quora_faiss_metadata.json
+
+python src/search.py \
+  --index_file indices/quora_faiss.index \
+  --index_metadata_file indices/quora_faiss_metadata.json \
+  --query "How can I learn Python fast?" \
+  --top_k 5
+```
+
+Mac note:
+
+- on macOS, `torch` and `faiss-cpu` can conflict over OpenMP runtime loading; the repo now applies the minimal environment workaround automatically before those libraries import
 
 ### 4. Evaluate
 

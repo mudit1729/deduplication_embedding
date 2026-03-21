@@ -1,4 +1,4 @@
-"""Build an HNSW ANN index over the corpus embeddings."""
+"""Build a local vector index over the corpus embeddings."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from utils import (
     load_corpus,
     load_json,
     normalize_embeddings,
+    require_faiss,
     save_json,
 )
 
@@ -36,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--index_file", type=Path, default=DEFAULT_INDEX_FILE)
     parser.add_argument("--metadata_file", type=Path, default=DEFAULT_INDEX_METADATA_FILE)
     parser.add_argument("--mapping_file", type=Path, default=DEFAULT_MAPPING_FILE)
+    parser.add_argument("--index_backend", choices=["hnswlib", "faiss"], default="hnswlib")
     parser.add_argument("--space", choices=["ip", "cosine"], default="ip")
     parser.add_argument("--m", type=int, default=32)
     parser.add_argument("--ef_construction", type=int, default=200)
@@ -45,7 +47,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Build and persist the ANN index."""
+    """Build and persist the vector index."""
     args = parse_args()
 
     corpus_df = load_corpus(args.corpus_file)
@@ -58,17 +60,26 @@ def main() -> None:
             f"{len(corpus_df)} != {embeddings.shape[0]}"
         )
 
-    index = hnswlib.Index(space=args.space, dim=embeddings.shape[1])
-    index.init_index(
-        max_elements=len(corpus_df),
-        ef_construction=args.ef_construction,
-        M=args.m,
-    )
-    index.add_items(embeddings, np.arange(len(corpus_df)))
-    index.set_ef(args.ef_search)
-
     args.index_file.parent.mkdir(parents=True, exist_ok=True)
-    index.save_index(str(args.index_file))
+    if args.index_backend == "faiss":
+        if args.space != "ip":
+            raise ValueError("The FAISS backend currently supports `--space ip` only.")
+        faiss = require_faiss()
+        index = faiss.IndexIDMap(faiss.IndexFlatIP(embeddings.shape[1]))
+        index.add_with_ids(embeddings, np.arange(len(corpus_df), dtype=np.int64))
+        faiss.write_index(index, str(args.index_file))
+        faiss_index_type = "IndexFlatIP"
+    else:
+        index = hnswlib.Index(space=args.space, dim=embeddings.shape[1])
+        index.init_index(
+            max_elements=len(corpus_df),
+            ef_construction=args.ef_construction,
+            M=args.m,
+        )
+        index.add_items(embeddings, np.arange(len(corpus_df)))
+        index.set_ef(args.ef_search)
+        index.save_index(str(args.index_file))
+        faiss_index_type = None
 
     mapping_df = corpus_df.copy()
     mapping_df.insert(0, "ann_id", range(len(mapping_df)))
@@ -79,16 +90,19 @@ def main() -> None:
         "corpus_file": str(args.corpus_file),
         "default_threshold": float(args.default_threshold),
         "dim": int(embeddings.shape[1]),
-        "ef_construction": int(args.ef_construction),
-        "ef_search": int(args.ef_search),
         "embeddings_file": str(args.embeddings_file),
         "embedding_model_name_or_path": embedding_metadata.get("model_name_or_path"),
+        "faiss_index_type": faiss_index_type,
         "index_file": str(args.index_file),
+        "index_backend": args.index_backend,
         "m": int(args.m),
         "mapping_file": str(args.mapping_file),
         "num_elements": int(len(corpus_df)),
         "space": args.space,
     }
+    if args.index_backend == "hnswlib":
+        metadata["ef_construction"] = int(args.ef_construction)
+        metadata["ef_search"] = int(args.ef_search)
     save_json(metadata, args.metadata_file)
 
     print(f"Saved index to: {args.index_file}")

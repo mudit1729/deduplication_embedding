@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import html
+import importlib.util
 import json
+import os
 import random
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -13,8 +16,19 @@ from typing import Any, Sequence
 import hnswlib
 import numpy as np
 import pandas as pd
+
+# Prevent macOS OpenMP conflicts when torch and faiss-cpu share a process.
+if sys.platform == "darwin" and importlib.util.find_spec("faiss") is not None:
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import torch
 from sentence_transformers import SentenceTransformer
+
+try:
+    import faiss
+except ImportError:  # pragma: no cover - optional dependency
+    faiss = None
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -41,7 +55,7 @@ DEFAULT_EVALUATION_SUMMARY_FILE = MODELS_DIR / "evaluation_summary.json"
 class IndexArtifacts:
     """All assets required for ANN search."""
 
-    index: hnswlib.Index
+    index: Any
     corpus_df: pd.DataFrame
     corpus_embeddings: np.ndarray
     metadata: dict[str, Any]
@@ -136,6 +150,16 @@ def encode_texts(
     return embeddings.astype(np.float32, copy=False)
 
 
+def require_faiss() -> Any:
+    """Return the faiss module or raise a helpful import error."""
+    if faiss is None:
+        raise ImportError(
+            "FAISS support requires the `faiss-cpu` package. "
+            "Install it with `pip install faiss-cpu` or `pip install -r requirements.txt`."
+        )
+    return faiss
+
+
 def save_json(payload: dict[str, Any], path: str | Path) -> None:
     """Write JSON with stable formatting."""
     path = Path(path)
@@ -176,7 +200,7 @@ def load_index_artifacts(
     embeddings_path: str | Path = DEFAULT_EMBEDDINGS_FILE,
     ef_search: int | None = None,
 ) -> IndexArtifacts:
-    """Load the HNSW index and its aligned metadata."""
+    """Load the vector index and its aligned metadata."""
     index_path = Path(index_path)
     metadata_path = Path(metadata_path)
     corpus_path = Path(corpus_path)
@@ -192,14 +216,19 @@ def load_index_artifacts(
             f"{len(corpus_df)} != {corpus_embeddings.shape[0]}"
         )
 
-    space = metadata.get("space", "ip")
-    dim = int(metadata.get("dim", corpus_embeddings.shape[1]))
-    index = hnswlib.Index(space=space, dim=dim)
-    index.load_index(str(index_path), max_elements=len(corpus_df))
+    index_backend = metadata.get("index_backend", "hnswlib")
+    if index_backend == "faiss":
+        faiss_module = require_faiss()
+        index = faiss_module.read_index(str(index_path))
+    else:
+        space = metadata.get("space", "ip")
+        dim = int(metadata.get("dim", corpus_embeddings.shape[1]))
+        index = hnswlib.Index(space=space, dim=dim)
+        index.load_index(str(index_path), max_elements=len(corpus_df))
 
-    resolved_ef_search = ef_search or metadata.get("ef_search")
-    if resolved_ef_search:
-        index.set_ef(int(resolved_ef_search))
+        resolved_ef_search = ef_search or metadata.get("ef_search")
+        if resolved_ef_search:
+            index.set_ef(int(resolved_ef_search))
 
     return IndexArtifacts(
         index=index,
@@ -227,10 +256,16 @@ def search_neighbors(
 
     requested = top_k + max(buffer, 0) + len(excluded_ids)
     search_width = min(len(artifacts.corpus_df), max(top_k, requested))
-    ann_ids, _distances = artifacts.index.knn_query(query_vector, k=search_width)
+    index_backend = artifacts.metadata.get("index_backend", "hnswlib")
+    if index_backend == "faiss":
+        _scores, ann_ids = artifacts.index.search(query_vector, search_width)
+    else:
+        ann_ids, _distances = artifacts.index.knn_query(query_vector, k=search_width)
 
     results: list[dict[str, Any]] = []
     for ann_id in ann_ids[0].tolist():
+        if int(ann_id) < 0:
+            continue
         row = artifacts.corpus_df.iloc[int(ann_id)]
         question_id = str(row["question_id"])
         question_text = str(row["question_text"])
