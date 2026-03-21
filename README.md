@@ -362,8 +362,138 @@ Interpretation:
 - exact dense search, FAISS exact search, and HNSW are effectively identical at this corpus size
 - lexical retrieval alone is weaker than dense retrieval, but character n-grams are noticeably better than word TF-IDF for near-duplicate questions
 - the best retriever in this comparison is the simple dense + character-TF-IDF hybrid
+- the hybrid wins because dense retrieval captures semantic paraphrases while character n-grams recover lexical overlap, spelling variants, and short phrase reuse that cosine similarity alone sometimes underweights
+- this is the main production lesson from the comparison: better retrieval does not always require a new encoder, sometimes it requires fusing a semantic signal with a cheap lexical signal
 
 That makes the hybrid retriever the next logical candidate to wire into the main search pipeline if you want better candidate generation without changing the encoder.
+
+## Active-Learning Loop
+
+The best run in this repo came from improving the data loop, not from adding the most complicated loss.
+
+```mermaid
+flowchart LR
+    A["Validation or production queries"] --> B["Embed with current encoder"]
+    B --> C["Retrieve top-k neighbors"]
+    C --> D["Apply cosine-similarity threshold"]
+    D --> E["Compare with labels or reviewer feedback"]
+    E --> F["False positives"]
+    E --> G["False negatives"]
+    C --> H["Mine close non-duplicate neighbors"]
+    F --> I["Feedback pool"]
+    G --> I
+    H --> I
+    I --> J["Augmented training file"]
+    J --> K["Retrain encoder"]
+    K --> L["Re-embed corpus"]
+    L --> M["Rebuild ANN index"]
+    M --> N["Re-evaluate Recall@k, MRR, Precision, Recall, F1"]
+    N -->|improved| B
+    N -->|not improved| I
+```
+
+Why this matters:
+
+- false positives teach the model where the duplicate boundary is too loose
+- false negatives teach the model where duplicate paraphrases are still too far apart
+- hard negatives teach retrieval which close neighbors should not collapse together
+- re-indexing is part of the learning loop because new embeddings without a new index do not change retrieval behavior
+
+## Contrastive Loss Math
+
+The documented fine-tuning run uses `sentence_transformers.losses.ContrastiveLoss` with:
+
+- distance metric: `SiameseDistanceMetric.COSINE_DISTANCE`
+- margin: `0.5`
+
+For a question pair `(q1, q2)`, let the encoder produce embeddings:
+
+```text
+e1 = f(q1)
+e2 = f(q2)
+```
+
+Cosine similarity is:
+
+```text
+s(q1, q2) = (e1 dot e2) / (||e1|| ||e2||)
+```
+
+The loss uses cosine distance:
+
+```text
+d(q1, q2) = 1 - s(q1, q2)
+```
+
+With label `y in {0, 1}` where `1` means duplicate and `0` means non-duplicate, the actual library loss is:
+
+```text
+L = 0.5 * [ y * d^2 + (1 - y) * max(0, m - d)^2 ]
+```
+
+where `m` is the contrastive margin.
+
+This splits into two cases:
+
+### Positive pair term
+
+If `y = 1`:
+
+```text
+L_pos = 0.5 * d^2
+```
+
+So duplicate questions are optimized by shrinking cosine distance toward `0`, which means pushing cosine similarity toward `1`.
+
+### Negative pair term
+
+If `y = 0`:
+
+```text
+L_neg = 0.5 * max(0, m - d)^2
+```
+
+So non-duplicate questions are only penalized when they are too close. If the distance is already at least the margin, they contribute zero loss.
+
+That hinge behavior matters:
+
+- easy negatives stop consuming gradient once they are far enough apart
+- hard negatives keep contributing gradient because they still sit inside the margin
+- training therefore spends more effort on the confusing non-duplicates that actually hurt retrieval and thresholding
+
+### What the margin means geometrically
+
+Because the training distance is `d = 1 - s`, a margin of `m = 0.5` means a negative pair stops being penalized once:
+
+```text
+1 - s >= 0.5
+```
+
+or equivalently:
+
+```text
+s <= 0.5
+```
+
+This is a training boundary, not the serving threshold.
+
+That distinction is important because the best duplicate decision threshold from evaluation was around `0.77`, not `0.50`. These two numbers solve different problems:
+
+- the contrastive margin controls representation geometry during training
+- the serving threshold controls the precision-recall tradeoff for the final duplicate decision
+
+In other words, training says "push non-duplicates at least this far apart," while evaluation says "given the resulting embedding space, what similarity cutoff gives the best F1 on held-out data?"
+
+### Why contrastive loss worked well here
+
+Compared with plain cosine regression, contrastive loss is better aligned with de-duplication:
+
+- positives are explicitly pulled together
+- negatives are explicitly pushed apart
+- the margin prevents wasting capacity on already-separated negatives
+- mined hard negatives naturally become high-value training examples because they sit inside the active part of the hinge
+
+That is why `contrastive + active learning` outperformed the baseline in this repo: the model was retrained on examples that fell near the real operational boundary.
 
 ## Contrastive Loss -> Active Learning -> Retrain
 

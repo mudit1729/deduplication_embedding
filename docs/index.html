@@ -17,6 +17,8 @@
       <nav class="nav">
         <a href="#pipeline">Pipeline</a>
         <a href="#improvement-loop">Improvement Loop</a>
+        <a href="#retrievers">Retrievers</a>
+        <a href="#loss-math">Loss Math</a>
         <a href="#experiments">Experiments</a>
         <a href="#curriculum">Learn</a>
         <a href="#resources">Resources</a>
@@ -146,6 +148,181 @@
               beats more complicated training when the feedback loop is aligned with the system’s real errors.
             </p>
           </div>
+        </div>
+        <div class="diagram-card">
+          <p class="panel-kicker">Mermaid view of the active-learning loop</p>
+          <div class="mermaid">
+flowchart LR
+    A["Validation or live queries"] --> B["Embed with current encoder"]
+    B --> C["Retrieve top-k neighbors"]
+    C --> D["Apply cosine threshold"]
+    D --> E["Compare with labels or reviewer feedback"]
+    E --> F["False positives"]
+    E --> G["False negatives"]
+    C --> H["Mine close non-duplicate neighbors"]
+    F --> I["Feedback pool"]
+    G --> I
+    H --> I
+    I --> J["Augmented training file"]
+    J --> K["Contrastive or retrieval-oriented retrain"]
+    K --> L["Re-embed corpus"]
+    L --> M["Rebuild ANN index"]
+    M --> N["Re-evaluate Recall@k, MRR, Precision, Recall, F1"]
+    N -->|improved| B
+    N -->|not improved| I
+          </div>
+        </div>
+      </section>
+
+      <section class="section retrievers" id="retrievers">
+        <div class="section-head">
+          <p class="eyebrow">Retriever Comparison</p>
+          <h2>Different retrieval mechanisms change what kinds of duplicates you can find</h2>
+          <p>
+            The repo now benchmarks dense, lexical, and hybrid retrieval on the same validation setup.
+            This matters because duplicate detection quality is limited by candidate generation before thresholding even starts.
+          </p>
+        </div>
+        <div class="comparison-table">
+          <div class="comparison-row comparison-header">
+            <span>Method</span>
+            <span>Signal</span>
+            <span>Backend</span>
+            <span>Recall@1</span>
+            <span>Recall@5</span>
+            <span>MRR</span>
+            <span>What it teaches</span>
+          </div>
+          <div class="comparison-row best-row">
+            <span>Hybrid dense + char TF-IDF</span>
+            <span>Semantic + lexical</span>
+            <span>Score fusion</span>
+            <span>0.6213</span>
+            <span>0.8353</span>
+            <span>0.7056</span>
+            <span>Best overall candidate generator in this repo.</span>
+          </div>
+          <div class="comparison-row">
+            <span>Dense HNSW</span>
+            <span>Semantic</span>
+            <span>hnswlib ANN</span>
+            <span>0.6046</span>
+            <span>0.8267</span>
+            <span>0.6911</span>
+            <span>Fast local ANN baseline with strong retrieval quality.</span>
+          </div>
+          <div class="comparison-row">
+            <span>Dense exact</span>
+            <span>Semantic</span>
+            <span>Brute-force dot product</span>
+            <span>0.6046</span>
+            <span>0.8267</span>
+            <span>0.6911</span>
+            <span>Shows the embedding model, not the ANN, is the main bottleneck here.</span>
+          </div>
+          <div class="comparison-row">
+            <span>Dense FAISS</span>
+            <span>Semantic</span>
+            <span>FAISS IndexFlatIP</span>
+            <span>0.6046</span>
+            <span>0.8267</span>
+            <span>0.6911</span>
+            <span>Same quality as exact dense search at this scale.</span>
+          </div>
+          <div class="comparison-row">
+            <span>TF-IDF char n-gram</span>
+            <span>Lexical</span>
+            <span>scikit-learn sparse retrieval</span>
+            <span>0.5553</span>
+            <span>0.7736</span>
+            <span>0.6382</span>
+            <span>Much better than word TF-IDF for spelling and phrase overlap.</span>
+          </div>
+          <div class="comparison-row">
+            <span>TF-IDF word n-gram</span>
+            <span>Lexical</span>
+            <span>scikit-learn sparse retrieval</span>
+            <span>0.4540</span>
+            <span>0.6679</span>
+            <span>0.5345</span>
+            <span>Weakest retriever for paraphrastic duplicates.</span>
+          </div>
+        </div>
+        <div class="insight-grid">
+          <article class="insight-card">
+            <h3>Why HNSW, exact, and FAISS tie here</h3>
+            <p>The corpus is only 40k questions and the index settings are strong enough that the ANN approximation error is negligible.</p>
+          </article>
+          <article class="insight-card">
+            <h3>Why character TF-IDF helps</h3>
+            <p>Near-duplicates often share substrings, morphology, or spelling variants that a semantic encoder and a word tokenizer can both partially miss.</p>
+          </article>
+          <article class="insight-card">
+            <h3>Why the hybrid wins</h3>
+            <p>Dense retrieval finds paraphrases, while character n-grams recover lexical closeness. Score fusion combines both without training a new model.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section loss-section" id="loss-math">
+        <div class="section-head">
+          <p class="eyebrow">Contrastive Loss Math</p>
+          <h2>The contrastive objective is shaping geometry, not directly choosing the duplicate threshold</h2>
+          <p>
+            The best training recipe in this repo uses <code>sentence-transformers</code>
+            <code>ContrastiveLoss</code> with cosine distance and margin <code>0.5</code>.
+            The math explains why it pairs well with hard negatives and active learning.
+          </p>
+        </div>
+        <div class="math-grid">
+          <article class="math-card">
+            <h3>1. Embed both questions</h3>
+            <p>For a pair <code>(q1, q2)</code>, the encoder produces two vectors:</p>
+            <pre class="equation-block"><code>e1 = f(q1)
+e2 = f(q2)</code></pre>
+            <p>The loss then measures how close or far those vectors are in embedding space.</p>
+          </article>
+          <article class="math-card">
+            <h3>2. Convert similarity into distance</h3>
+            <p>The library uses cosine distance, derived from cosine similarity:</p>
+            <pre class="equation-block"><code>s(q1, q2) = (e1 dot e2) / (||e1|| * ||e2||)
+d(q1, q2) = 1 - s(q1, q2)</code></pre>
+            <p>Duplicates should have small <code>d</code>. Non-duplicates should have larger <code>d</code>.</p>
+          </article>
+          <article class="math-card">
+            <h3>3. Positive pairs are pulled together</h3>
+            <p>For duplicate labels <code>y = 1</code>, the loss becomes:</p>
+            <pre class="equation-block"><code>L_pos = 0.5 * d^2</code></pre>
+            <p>This means the closer a duplicate pair already is, the smaller the gradient becomes. The model focuses hardest on positives that are still far apart.</p>
+          </article>
+          <article class="math-card">
+            <h3>4. Negative pairs use a hinge margin</h3>
+            <p>For non-duplicate labels <code>y = 0</code>, the loss becomes:</p>
+            <pre class="equation-block"><code>L_neg = 0.5 * max(0, m - d)^2</code></pre>
+            <p>If a negative pair is already farther apart than the margin <code>m</code>, it contributes zero loss. Only hard negatives inside the margin keep pushing gradients.</p>
+          </article>
+        </div>
+        <div class="math-grid">
+          <article class="math-card math-wide">
+            <h3>The full loss used in this repo</h3>
+            <pre class="equation-block"><code>L = 0.5 * [ y * d^2 + (1 - y) * max(0, m - d)^2 ]</code></pre>
+            <p>
+              With <code>m = 0.5</code>, a negative pair stops being penalized once its cosine distance reaches
+              <code>0.5</code>, which is equivalent to cosine similarity falling to <code>0.5</code> or below.
+            </p>
+          </article>
+          <article class="math-card math-wide">
+            <h3>Why the margin is not the serving threshold</h3>
+            <p>
+              The margin is a training rule about embedding geometry. The serving threshold is chosen later by sweeping validation similarities
+              and selecting the cutoff that gives the best precision-recall tradeoff. In this repo, the best operational threshold ended up around
+              <code>0.77</code>, well above the training margin boundary.
+            </p>
+            <p>
+              That is normal. Training says "push hard negatives outside the active margin." Evaluation says
+              "given the whole learned space, where should the classifier cut for best F1?"
+            </p>
+          </article>
         </div>
       </section>
 
@@ -320,6 +497,10 @@ python src/search.py --query "How can I learn Python fast?" --top_k 5</code></pr
             <h3>Loss functions</h3>
             <p>Contrastive, MultipleNegativesRankingLoss, and TripletLoss references.</p>
           </a>
+          <a class="resource-card" href="https://ieeexplore.ieee.org/document/1640964">
+            <h3>Contrastive loss paper</h3>
+            <p>The original Hadsell, Chopra, and LeCun paper on learning invariant embeddings with a margin.</p>
+          </a>
           <a class="resource-card" href="https://github.com/nmslib/hnswlib">
             <h3>hnswlib</h3>
             <p>The ANN index library used for local semantic retrieval.</p>
@@ -327,6 +508,10 @@ python src/search.py --query "How can I learn Python fast?" --top_k 5</code></pr
           <a class="resource-card" href="https://github.com/facebookresearch/faiss">
             <h3>FAISS</h3>
             <p>An optional exact or approximate vector-search backend. This repo now supports a FAISS CPU index too.</p>
+          </a>
+          <a class="resource-card" href="https://scikit-learn.org/stable/modules/feature_extraction.html#text-feature-extraction">
+            <h3>TF-IDF and n-grams</h3>
+            <p>Useful background for understanding the lexical retrievers and why character n-grams helped.</p>
           </a>
           <a class="resource-card" href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2">
             <h3>MiniLM baseline model</h3>
@@ -348,6 +533,10 @@ python src/search.py --query "How can I learn Python fast?" --top_k 5</code></pr
       </p>
     </footer>
 
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral" });
+    </script>
     <script src="./app.js"></script>
   </body>
 </html>
