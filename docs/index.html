@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deduplication Embedding | Learning Site</title>
+    <meta
+      name="description"
+      content="A practical teaching site for a retrieval-first de-duplication pipeline built on Quora Question Pairs, sentence-transformers, HNSW, and active learning."
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="page-shell"></div>
+    <header class="topbar">
+      <a class="brand" href="#top">Deduplication Embedding</a>
+      <nav class="nav">
+        <a href="#pipeline">Pipeline</a>
+        <a href="#improvement-loop">Improvement Loop</a>
+        <a href="#experiments">Experiments</a>
+        <a href="#curriculum">Learn</a>
+        <a href="#resources">Resources</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">GitHub Pages Learning Site</p>
+          <h1>De-duplication is not a one-shot model. It is a retrieval system that keeps learning from its mistakes.</h1>
+          <p class="lead">
+            This project teaches a realistic duplicate-question pipeline on Quora Question Pairs:
+            prepare data, build a corpus, generate embeddings, search with HNSW, threshold similarity,
+            evaluate failure modes, mine hard negatives, and retrain.
+          </p>
+          <div class="cta-row">
+            <a class="button primary" href="https://github.com/mudit1729/deduplication_embedding">View Repository</a>
+            <a class="button secondary" href="#curriculum">Start Learning</a>
+          </div>
+          <div class="hero-facts">
+            <div class="fact-card">
+              <span class="fact-label">Dataset</span>
+              <strong>Quora Question Pairs</strong>
+            </div>
+            <div class="fact-card">
+              <span class="fact-label">Default Corpus</span>
+              <strong>40,000 questions</strong>
+            </div>
+            <div class="fact-card">
+              <span class="fact-label">Best Run</span>
+              <strong>Contrastive + active learning</strong>
+            </div>
+          </div>
+        </div>
+        <aside class="hero-panel">
+          <div class="panel-card">
+            <p class="panel-kicker">System Snapshot</p>
+            <ul class="metric-list">
+              <li><span>Baseline F1</span><strong>0.7352</strong></li>
+              <li><span>Best F1</span><strong>0.8359</strong></li>
+              <li><span>Best Recall@5</span><strong>0.8250</strong></li>
+              <li><span>ANN Index</span><strong>hnswlib</strong></li>
+            </ul>
+          </div>
+          <div class="signal-card">
+            <p class="signal-title">Core teaching point</p>
+            <p>
+              Good duplicate detection is a loop: retrieval, scoring, evaluation, feedback mining,
+              retraining, and re-indexing.
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="section" id="pipeline">
+        <div class="section-head">
+          <p class="eyebrow">Mental Model</p>
+          <h2>The end-to-end pipeline</h2>
+          <p>
+            The repo is intentionally small, but every stage matches a production concern: data quality,
+            semantic retrieval, decision thresholds, offline evaluation, and continuous improvement.
+          </p>
+        </div>
+        <div class="pipeline-grid">
+          <article class="stage-card">
+            <span class="stage-number">01</span>
+            <h3>Prepare data</h3>
+            <p>Download Quora pairs, normalize text, remove invalid rows, create train and validation splits, and build a unique question corpus.</p>
+          </article>
+          <article class="stage-card">
+            <span class="stage-number">02</span>
+            <h3>Embed questions</h3>
+            <p>Start with <code>all-MiniLM-L6-v2</code>, then optionally fine-tune for pair classification or retrieval-oriented training.</p>
+          </article>
+          <article class="stage-card">
+            <span class="stage-number">03</span>
+            <h3>Index locally</h3>
+            <p>Use <code>hnswlib</code> to build a local HNSW ANN index over corpus embeddings for fast nearest-neighbor lookup.</p>
+          </article>
+          <article class="stage-card">
+            <span class="stage-number">04</span>
+            <h3>Search candidates</h3>
+            <p>Embed a query, search top-k neighbors, and recompute cosine scores for readable ranked results.</p>
+          </article>
+          <article class="stage-card">
+            <span class="stage-number">05</span>
+            <h3>Decide duplicate or not</h3>
+            <p>Use a similarity threshold to turn retrieval outputs into a binary duplicate decision.</p>
+          </article>
+          <article class="stage-card">
+            <span class="stage-number">06</span>
+            <h3>Measure the right things</h3>
+            <p>Evaluate retrieval with Recall@1, Recall@5, and MRR. Evaluate classification with precision, recall, F1, and threshold sweeps.</p>
+          </article>
+          <article class="stage-card">
+            <span class="stage-number">07</span>
+            <h3>Mine better training signal</h3>
+            <p>Export false positives, false negatives, and hard negatives so the encoder improves on the mistakes the current system actually makes.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section loop-section" id="improvement-loop">
+        <div class="section-head">
+          <p class="eyebrow">Constant Improvement</p>
+          <h2>The system improves through feedback, not just bigger models</h2>
+          <p>
+            This repo is designed to teach that de-duplication quality is driven by the quality of the failure analysis loop.
+          </p>
+        </div>
+        <div class="loop-layout">
+          <ol class="loop-steps">
+            <li><strong>Run the current model</strong><span>Retrieve neighbors and classify pairs.</span></li>
+            <li><strong>Collect failures</strong><span>False positives and false negatives show where the decision boundary is wrong.</span></li>
+            <li><strong>Mine hard negatives</strong><span>Nearest non-duplicates expose retrieval confusion the model currently cannot separate.</span></li>
+            <li><strong>Augment training data</strong><span>Fold difficult examples back into the next training cycle.</span></li>
+            <li><strong>Retrain the encoder</strong><span>Use contrastive, MNRL, or triplet objectives depending on the target behavior.</span></li>
+            <li><strong>Rebuild the index</strong><span>New embeddings require a new ANN index before search improves.</span></li>
+            <li><strong>Compare metrics again</strong><span>If offline metrics do not improve, the new objective is not yet paying off.</span></li>
+          </ol>
+          <div class="loop-callout">
+            <p class="panel-kicker">What the experiments showed</p>
+            <p>
+              The strongest result in this project came from contrastive training plus active learning,
+              not from the most specialized retrieval loss. That is a useful lesson: better-shaped supervision
+              beats more complicated training when the feedback loop is aligned with the system’s real errors.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section experiments" id="experiments">
+        <div class="section-head">
+          <p class="eyebrow">Experiment Timeline</p>
+          <h2>What changed across iterations</h2>
+          <p>
+            These are measured local runs on the default 30k train / 5k validation / 40k corpus setup.
+            The goal is to show how a de-duplication system changes as you improve supervision.
+          </p>
+        </div>
+        <div class="experiment-table">
+          <div class="experiment-row experiment-header">
+            <span>Model</span>
+            <span>Avg Precision</span>
+            <span>F1</span>
+            <span>Recall@1</span>
+            <span>Recall@5</span>
+            <span>Key Lesson</span>
+          </div>
+          <div class="experiment-row">
+            <span>Baseline MiniLM</span>
+            <span>0.7628</span>
+            <span>0.7352</span>
+            <span>0.6046</span>
+            <span>0.8267</span>
+            <span>Strong retrieval baseline with simple thresholding.</span>
+          </div>
+          <div class="experiment-row">
+            <span>Contrastive fine-tune</span>
+            <span>0.8465</span>
+            <span>0.8060</span>
+            <span>0.5997</span>
+            <span>0.8131</span>
+            <span>Better pair classification, slightly weaker retrieval.</span>
+          </div>
+          <div class="experiment-row best-row">
+            <span>Contrastive + active learning</span>
+            <span>0.8647</span>
+            <span>0.8359</span>
+            <span>0.6051</span>
+            <span>0.8250</span>
+            <span>Best overall tradeoff in this repo.</span>
+          </div>
+          <div class="experiment-row">
+            <span>Contrastive warm-start + aligned triplet</span>
+            <span>0.8430</span>
+            <span>0.8052</span>
+            <span>0.5975</span>
+            <span>0.8131</span>
+            <span>Better hard-negative alignment, but not a better system yet.</span>
+          </div>
+        </div>
+        <div class="insight-grid">
+          <article class="insight-card">
+            <h3>What actually improved</h3>
+            <p>Active learning increased precision and recall together because the new training examples matched the system’s real confusion set.</p>
+          </article>
+          <article class="insight-card">
+            <h3>What did not automatically improve</h3>
+            <p>Triplet training became more correct after aligning the mining anchors, but the first aligned run still failed to beat the best active-learning result.</p>
+          </article>
+          <article class="insight-card">
+            <h3>Why that matters</h3>
+            <p>In de-duplication, better objective design is only valuable if it improves the full system metrics, not just the training story.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section curriculum" id="curriculum">
+        <div class="section-head">
+          <p class="eyebrow">Learning Material</p>
+          <h2>A practical study path for de-duplication systems</h2>
+          <p>Use the codebase as the lab and this sequence as the teaching order.</p>
+        </div>
+        <div class="lesson-grid">
+          <article class="lesson-card">
+            <h3>Lesson 1: Reframe the problem</h3>
+            <p>Duplicate detection is not only a classifier. It is usually retrieval first, then scoring or reranking.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 2: Clean data beats clever code</h3>
+            <p>Corpus construction, question normalization, and train-validation splits determine whether metrics mean anything.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 3: Embeddings are the retrieval backbone</h3>
+            <p>Sentence-transformers give a small, practical baseline that runs locally and supports both search and training.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 4: ANN is an engineering tradeoff</h3>
+            <p>HNSW lets you search large corpora quickly, but retrieval quality depends on both index settings and the embedding geometry.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 5: Thresholds are part of the model</h3>
+            <p>A threshold sweep is not an afterthought. It is the operational policy layer for duplicate vs non-duplicate decisions.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 6: Measure retrieval and classification separately</h3>
+            <p>Recall@k and MRR tell you if the right candidate is retrieved. Precision, recall, and F1 tell you if the decision layer behaves well.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 7: Improvement comes from the failure loop</h3>
+            <p>False positives, false negatives, and hard negatives are not side outputs. They are the next version of the training set.</p>
+          </article>
+          <article class="lesson-card">
+            <h3>Lesson 8: Not every new objective wins</h3>
+            <p>The aligned triplet experiment improved the data alignment but still lost to contrastive plus active learning. That is a real systems lesson.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section commands">
+        <div class="section-head">
+          <p class="eyebrow">Hands-On Lab</p>
+          <h2>Run the full loop yourself</h2>
+        </div>
+        <div class="command-grid">
+          <article class="command-card">
+            <h3>Baseline</h3>
+            <pre><code>python src/prepare_data.py
+python src/train_encoder.py --mode embed
+python src/build_index.py
+python src/evaluate.py
+python src/search.py --query "How can I learn Python fast?" --top_k 5</code></pre>
+          </article>
+          <article class="command-card">
+            <h3>Best current workflow</h3>
+            <pre><code>python src/train_encoder.py \
+  --mode finetune \
+  --loss_type contrastive \
+  --contrastive_margin 0.5 \
+  --epochs 1 \
+  --train_batch_size 32 \
+  --output_model_dir models/quora_miniLM_contrastive \
+  --embed_after_training \
+  --output_embeddings models/corpus_embeddings_contrastive.npy \
+  --embedding_metadata_file models/embedding_metadata_contrastive.json</code></pre>
+          </article>
+          <article class="command-card">
+            <h3>Teach the hard-negative loop</h3>
+            <pre><code>python src/active_learning.py \
+  --model_name_or_path models/quora_miniLM_contrastive \
+  --embeddings_file models/corpus_embeddings_contrastive.npy \
+  --index_file indices/quora_hnsw_contrastive.index \
+  --index_metadata_file indices/quora_hnsw_contrastive_metadata.json \
+  --threshold_summary_file models/evaluation_summary_contrastive.json</code></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="section resources" id="resources">
+        <div class="section-head">
+          <p class="eyebrow">Further Study</p>
+          <h2>Curated learning material</h2>
+          <p>These links help connect the toy project to the real libraries and concepts behind it.</p>
+        </div>
+        <div class="resource-grid">
+          <a class="resource-card" href="https://huggingface.co/datasets/sentence-transformers/quora-duplicates">
+            <h3>Quora duplicate dataset</h3>
+            <p>The exact dataset used by this project.</p>
+          </a>
+          <a class="resource-card" href="https://www.sbert.net/">
+            <h3>Sentence Transformers docs</h3>
+            <p>Model loading, encoding, fine-tuning, evaluators, and loss functions.</p>
+          </a>
+          <a class="resource-card" href="https://www.sbert.net/docs/package_reference/sentence_transformer/losses.html">
+            <h3>Loss functions</h3>
+            <p>Contrastive, MultipleNegativesRankingLoss, and TripletLoss references.</p>
+          </a>
+          <a class="resource-card" href="https://github.com/nmslib/hnswlib">
+            <h3>hnswlib</h3>
+            <p>The ANN index library used for local semantic retrieval.</p>
+          </a>
+          <a class="resource-card" href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2">
+            <h3>MiniLM baseline model</h3>
+            <p>The baseline encoder used to start the pipeline.</p>
+          </a>
+          <a class="resource-card" href="https://scikit-learn.org/stable/modules/model_evaluation.html">
+            <h3>Evaluation metrics</h3>
+            <p>Background on precision, recall, F1, ranking metrics, and validation workflows.</p>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Built from a working local Mac project and deployed with GitHub Pages.</p>
+      <p>
+        Repo:
+        <a href="https://github.com/mudit1729/deduplication_embedding">mudit1729/deduplication_embedding</a>
+      </p>
+    </footer>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

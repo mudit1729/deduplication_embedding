@@ -47,6 +47,22 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_EVALUATION_SUMMARY_FILE,
     )
+    parser.add_argument(
+        "--hard_negative_anchor_file",
+        type=Path,
+        default=None,
+        help="Optional pair file whose questions are used as ANN mining anchors.",
+    )
+    parser.add_argument(
+        "--hard_negative_positive_only",
+        action="store_true",
+        help="Restrict hard-negative anchors to positive duplicate pairs from the anchor file.",
+    )
+    parser.add_argument(
+        "--hard_negative_use_both_question_columns",
+        action="store_true",
+        help="Mine from both question columns instead of only question1 anchors.",
+    )
     parser.add_argument("--search_k", type=int, default=15)
     parser.add_argument("--search_buffer", type=int, default=30)
     parser.add_argument("--hard_negative_min_score", type=float, default=0.60)
@@ -99,9 +115,41 @@ def compute_pair_scores(validation_df: pd.DataFrame, embedding_lookup: dict[str,
     return scores
 
 
+def build_hard_negative_queries(
+    anchor_df: pd.DataFrame,
+    positive_only: bool,
+    use_both_question_columns: bool,
+) -> pd.DataFrame:
+    """Build the set of query anchors used for hard-negative mining."""
+    working_df = anchor_df.copy()
+    if positive_only:
+        if "label" not in working_df.columns:
+            raise ValueError("The hard-negative anchor file must contain a label column when using --hard_negative_positive_only.")
+        working_df = working_df[working_df["label"] == 1].copy()
+
+    query_frames = [
+        working_df[["question1", "question1_id"]].rename(
+            columns={"question1": "question_text", "question1_id": "question_id"}
+        )
+    ]
+    if use_both_question_columns:
+        query_frames.append(
+            working_df[["question2", "question2_id"]].rename(
+                columns={"question2": "question_text", "question2_id": "question_id"}
+            )
+        )
+
+    query_df = pd.concat(query_frames, ignore_index=True)
+    query_df = query_df.dropna(subset=["question_text"]).copy()
+    query_df["question_text"] = query_df["question_text"].astype(str)
+    query_df = query_df[query_df["question_text"] != ""].drop_duplicates().reset_index(drop=True)
+    return query_df
+
+
 def mine_hard_negatives(
     train_df: pd.DataFrame,
     validation_df: pd.DataFrame,
+    query_df: pd.DataFrame,
     embedding_lookup: dict[str, np.ndarray],
     artifacts,
     search_k: int,
@@ -116,27 +164,28 @@ def mine_hard_negatives(
         for row in negative_df.itertuples(index=False)
     }
 
-    unique_queries = validation_df[["question1", "question1_id"]].drop_duplicates().reset_index(drop=True)
     records = []
-    for row in tqdm(unique_queries.itertuples(index=False), total=len(unique_queries), desc="Hard negatives"):
-        exclude_ids = {str(row.question1_id)} if pd.notna(row.question1_id) else set()
+    for row in tqdm(query_df.itertuples(index=False), total=len(query_df), desc="Hard negatives"):
+        query_text = str(row.question_text)
+        query_id = getattr(row, "question_id", None)
+        exclude_ids = {str(query_id)} if pd.notna(query_id) else set()
         results = search_neighbors(
             artifacts=artifacts,
-            query_embedding=embedding_lookup[row.question1],
+            query_embedding=embedding_lookup[query_text],
             top_k=search_k,
             exclude_question_ids=exclude_ids,
-            exclude_text=row.question1,
+            exclude_text=query_text,
             buffer=search_buffer,
         )
         for rank, result in enumerate(results, start=1):
-            key = pair_key(row.question1, result["question_text"])
+            key = pair_key(query_text, result["question_text"])
             negative_example = negative_lookup.get(key)
             if negative_example is None or result["score"] < min_score:
                 continue
             records.append(
                 {
-                    "question1": row.question1,
-                    "question1_id": row.question1_id,
+                    "question1": query_text,
+                    "question1_id": query_id,
                     "question2": result["question_text"],
                     "question2_id": result["question_id"],
                     "similarity": float(result["score"]),
@@ -182,7 +231,22 @@ def main() -> None:
 
     train_df = load_pairs(args.train_file)
     validation_df = load_pairs(args.validation_file)
-    texts = pd.concat([validation_df["question1"], validation_df["question2"]], ignore_index=True)
+    hard_negative_anchor_file = args.hard_negative_anchor_file or args.validation_file
+    hard_negative_anchor_df = load_pairs(hard_negative_anchor_file)
+    hard_negative_query_df = build_hard_negative_queries(
+        anchor_df=hard_negative_anchor_df,
+        positive_only=args.hard_negative_positive_only,
+        use_both_question_columns=args.hard_negative_use_both_question_columns,
+    )
+
+    texts = pd.concat(
+        [
+            validation_df["question1"],
+            validation_df["question2"],
+            hard_negative_query_df["question_text"],
+        ],
+        ignore_index=True,
+    )
     embedding_lookup = build_embedding_lookup(
         texts=texts,
         model_name_or_path=args.model_name_or_path,
@@ -215,6 +279,7 @@ def main() -> None:
     hard_negatives_df = mine_hard_negatives(
         train_df=train_df,
         validation_df=validation_df,
+        query_df=hard_negative_query_df,
         embedding_lookup=embedding_lookup,
         artifacts=artifacts,
         search_k=args.search_k,
@@ -256,6 +321,10 @@ def main() -> None:
         "threshold": float(threshold),
         "false_positives": int(len(false_positives_df)),
         "false_negatives": int(len(false_negatives_df)),
+        "hard_negative_anchor_file": str(hard_negative_anchor_file),
+        "hard_negative_anchor_queries": int(len(hard_negative_query_df)),
+        "hard_negative_positive_only": bool(args.hard_negative_positive_only),
+        "hard_negative_use_both_question_columns": bool(args.hard_negative_use_both_question_columns),
         "hard_negatives": int(len(hard_negatives_df)),
         "feedback_examples": int(len(feedback_df)),
         "updated_train_rows": int(len(updated_train_df)),

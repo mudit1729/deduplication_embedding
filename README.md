@@ -1,5 +1,7 @@
 # Deduplication Embedding
 
+Learning site: [mudit1729.github.io/deduplication_embedding](https://mudit1729.github.io/deduplication_embedding/)
+
 Local near-duplicate question detection on the Quora Question Pairs dataset using:
 
 - `sentence-transformers`
@@ -161,12 +163,18 @@ Outputs:
 
 ## Fine-Tuning
 
-`src/train_encoder.py` supports two fine-tuning losses:
+`src/train_encoder.py` now supports four fine-tuning losses:
 
 - `--loss_type cosine`
 - `--loss_type contrastive`
+- `--loss_type multiple_negatives`
+- `--loss_type triplet`
 
-The contrastive setup is the more useful one in this repo.
+Recommended usage:
+
+- `contrastive` is the best pair-classification baseline in this repo
+- `multiple_negatives` is the simplest retrieval-oriented objective because it trains on positive pairs and uses the rest of the batch as negatives
+- `triplet` is the explicit hard-negative option when you have mined negatives for the same anchor distribution as your positive training data
 
 Example:
 
@@ -203,6 +211,89 @@ python src/evaluate.py \
   --retrieval_csv models/validation_retrieval_results_contrastive.csv \
   --summary_json models/evaluation_summary_contrastive.json
 ```
+
+## Retrieval-Oriented Fine-Tuning
+
+If your next goal is better nearest-neighbor retrieval rather than only better pair classification, there are now two explicit retrieval-style options.
+
+### Option 1. MultipleNegativesRankingLoss
+
+This uses only positive duplicate pairs. Every other item in the batch acts as an implicit negative, which makes it a good first retrieval objective on a laptop.
+
+```bash
+python src/train_encoder.py \
+  --mode finetune \
+  --loss_type multiple_negatives \
+  --epochs 1 \
+  --train_batch_size 32 \
+  --output_model_dir models/quora_miniLM_mnrl \
+  --embed_after_training \
+  --output_embeddings models/corpus_embeddings_mnrl.npy \
+  --embedding_metadata_file models/embedding_metadata_mnrl.json
+```
+
+Notes:
+
+- this path automatically filters the training file down to positive pairs
+- larger batch sizes usually help more here than with cosine loss
+- if memory is tight on Mac, drop `--train_batch_size` to `16`
+
+### Option 2. Triplet Loss With Hard Negatives
+
+This uses `(anchor, positive, negative)` triplets and can consume a mined negative file via `--hard_negative_file`.
+
+```bash
+python src/train_encoder.py \
+  --mode finetune \
+  --loss_type triplet \
+  --train_file data/processed/train_pairs_active_learning_contrastive.csv \
+  --hard_negative_file data/processed/hard_negatives_contrastive.csv \
+  --triplet_distance_metric cosine \
+  --triplet_margin 0.2 \
+  --triplets_per_positive 1 \
+  --epochs 1 \
+  --train_batch_size 32 \
+  --output_model_dir models/quora_miniLM_triplet \
+  --embed_after_training \
+  --output_embeddings models/corpus_embeddings_triplet.npy \
+  --embedding_metadata_file models/embedding_metadata_triplet.json
+```
+
+Important caveat:
+
+- triplet training is strongest when the hard-negative file was mined for the same anchor set used in the positive training pairs
+- if the anchors barely overlap, the script still falls back to negative pairs from the training file itself, but the resulting triplet set will be smaller and less useful
+- the training summary written to `training_summary.json` includes `triplet_examples_used`, `anchors_with_triplets`, and `mined_negative_triplets` so you can see whether the negative source was actually helping
+
+### Mining Hard Negatives For The Training Anchor Set
+
+`src/active_learning.py` can now mine hard negatives from a separate anchor file instead of only from validation `question1` anchors. This is the recommended way to prepare triplet training data that actually overlaps with the positives used for retraining.
+
+Example:
+
+```bash
+python src/active_learning.py \
+  --train_file data/processed/train_pairs.csv \
+  --validation_file data/processed/validation_pairs.csv \
+  --model_name_or_path models/quora_miniLM_contrastive \
+  --embeddings_file models/corpus_embeddings_contrastive.npy \
+  --index_file indices/quora_hnsw_contrastive.index \
+  --index_metadata_file indices/quora_hnsw_contrastive_metadata.json \
+  --threshold_summary_file models/evaluation_summary_contrastive.json \
+  --hard_negative_anchor_file data/processed/train_pairs.csv \
+  --hard_negative_positive_only \
+  --hard_negative_use_both_question_columns \
+  --hard_negatives_output data/processed/hard_negatives_contrastive_train_anchors.csv \
+  --feedback_output data/processed/active_learning_feedback_examples_contrastive_train_anchors.csv \
+  --updated_train_output data/processed/train_pairs_active_learning_contrastive_train_anchors.csv
+```
+
+In the documented run:
+
+- hard-negative anchor queries: `19,033`
+- aligned hard negatives found: `261`
+- triplet examples built later: `649`
+- triplets using mined negatives: `294`
 
 ## Contrastive Loss -> Active Learning -> Retrain
 
@@ -315,12 +406,14 @@ The following metrics were produced from actual local runs in this repo on the d
 | Baseline MiniLM | 0.7628 | 0.6505 | 0.8451 | 0.7352 | 0.7600 | 0.6046 | 0.8267 | 0.6912 |
 | Contrastive Fine-Tune | 0.8465 | 0.7525 | 0.8678 | 0.8060 | 0.7800 | 0.5997 | 0.8131 | 0.6824 |
 | Contrastive + Active Learning | 0.8647 | 0.7714 | 0.9122 | 0.8359 | 0.7700 | 0.6051 | 0.8250 | 0.6892 |
+| Contrastive Warm-Start + Aligned Triplet | 0.8430 | 0.7351 | 0.8900 | 0.8052 | 0.7400 | 0.5975 | 0.8131 | 0.6805 |
 
 Interpretation:
 
 - contrastive loss gives a large win on pair classification quality
 - a naive cosine-loss fine-tune helped classification too, but hurt retrieval more sharply, so it is not the focus here
 - contrastive plus one active-learning retrain kept retrieval almost flat versus baseline while materially improving precision, recall, F1, and average precision
+- aligned triplet training successfully increased the share of truly mined negatives inside the triplet dataset, but this first run did not beat the contrastive or contrastive-plus-active baselines on retrieval or classification
 
 That final tradeoff is the best fit for this toy retrieval-first pipeline.
 
