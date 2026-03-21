@@ -327,6 +327,44 @@ In the documented run:
 - triplet examples built later: `649`
 - triplets using mined negatives: `294`
 
+## Comparing Retrieval Mechanisms
+
+The repo now includes a retrieval benchmark script:
+
+```bash
+python src/compare_retrievers.py \
+  --summary_csv models/retriever_comparison.csv \
+  --details_csv models/retriever_comparison_details.csv
+```
+
+It compares:
+
+- dense HNSW retrieval
+- dense exact retrieval
+- dense FAISS retrieval
+- word-level TF-IDF retrieval
+- character n-gram TF-IDF retrieval
+- a simple dense + character-TF-IDF hybrid
+
+Measured retrieval results on the default setup:
+
+| Method | Recall@1 | Recall@5 | MRR |
+| --- | ---: | ---: | ---: |
+| Hybrid dense + char TF-IDF | 0.6213 | 0.8353 | 0.7056 |
+| Dense HNSW | 0.6046 | 0.8267 | 0.6911 |
+| Dense exact | 0.6046 | 0.8267 | 0.6911 |
+| Dense FAISS | 0.6046 | 0.8267 | 0.6911 |
+| TF-IDF char n-gram | 0.5553 | 0.7736 | 0.6382 |
+| TF-IDF word n-gram | 0.4540 | 0.6679 | 0.5345 |
+
+Interpretation:
+
+- exact dense search, FAISS exact search, and HNSW are effectively identical at this corpus size
+- lexical retrieval alone is weaker than dense retrieval, but character n-grams are noticeably better than word TF-IDF for near-duplicate questions
+- the best retriever in this comparison is the simple dense + character-TF-IDF hybrid
+
+That makes the hybrid retriever the next logical candidate to wire into the main search pipeline if you want better candidate generation without changing the encoder.
+
 ## Contrastive Loss -> Active Learning -> Retrain
 
 This is the workflow that produced the best model in this repo.
