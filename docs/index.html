@@ -353,6 +353,14 @@ d(q1, q2) = 1 - s(q1, q2)</code></pre>
             <span>Strong retrieval baseline with simple thresholding.</span>
           </div>
           <div class="experiment-row">
+            <span>MNRL fine-tune</span>
+            <span>0.7508</span>
+            <span>0.7282</span>
+            <span>0.6116</span>
+            <span>0.8223</span>
+            <span>Best dense retriever among the single-loss runs, but weaker duplicate classification.</span>
+          </div>
+          <div class="experiment-row">
             <span>Contrastive fine-tune</span>
             <span>0.8465</span>
             <span>0.8060</span>
@@ -383,12 +391,16 @@ d(q1, q2) = 1 - s(q1, q2)</code></pre>
             <p>Active learning increased precision and recall together because the new training examples matched the system’s real confusion set.</p>
           </article>
           <article class="insight-card">
+            <h3>What MNRL was best at</h3>
+            <p>MNRL delivered the strongest retrieval of the dense training losses, with Recall@1 of 0.6116 and MRR of 0.6956, but it produced too many false positives for final duplicate classification.</p>
+          </article>
+          <article class="insight-card">
             <h3>What did not automatically improve</h3>
             <p>Triplet training became more correct after aligning the mining anchors, but the first aligned run still failed to beat the best active-learning result.</p>
           </article>
           <article class="insight-card">
             <h3>Why that matters</h3>
-            <p>In de-duplication, better objective design is only valuable if it improves the full system metrics, not just the training story.</p>
+            <p>In de-duplication, retrieval and classification are not the same objective. MNRL helped ranking, while contrastive helped the final duplicate decision much more.</p>
           </article>
           <article class="insight-card">
             <h3>Best retriever from the comparison run</h3>
