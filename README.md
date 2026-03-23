@@ -604,16 +604,18 @@ The following metrics were produced from actual local runs in this repo on the d
 | Model | Avg Precision | Precision | Recall | F1 | Best Threshold | Recall@1 | Recall@5 | MRR |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Baseline MiniLM | 0.7628 | 0.6505 | 0.8451 | 0.7352 | 0.7600 | 0.6046 | 0.8267 | 0.6912 |
+| MNRL Fine-Tune | 0.7508 | 0.6164 | 0.8895 | 0.7282 | 0.7100 | 0.6116 | 0.8223 | 0.6956 |
 | Contrastive Fine-Tune | 0.8465 | 0.7525 | 0.8678 | 0.8060 | 0.7800 | 0.5997 | 0.8131 | 0.6824 |
 | Contrastive + Active Learning | 0.8647 | 0.7714 | 0.9122 | 0.8359 | 0.7700 | 0.6051 | 0.8250 | 0.6892 |
-| Contrastive Warm-Start + Aligned Triplet | 0.8430 | 0.7351 | 0.8900 | 0.8052 | 0.7400 | 0.5975 | 0.8131 | 0.6805 |
+| MNRL + Active Learning | 0.7601 | 0.6397 | 0.8667 | 0.7361 | 0.7400 | 0.6105 | 0.8250 | 0.6950 |
 
 Interpretation:
 
 - contrastive loss gives a large win on pair classification quality
+- MNRL gives the best dense retrieval of the single-loss runs, but its duplicate classification quality is weaker because it is optimized for ranking positives above in-batch negatives rather than for a sharp binary decision boundary
 - a naive cosine-loss fine-tune helped classification too, but hurt retrieval more sharply, so it is not the focus here
 - contrastive plus one active-learning retrain kept retrieval almost flat versus baseline while materially improving precision, recall, F1, and average precision
-- aligned triplet training successfully increased the share of truly mined negatives inside the triplet dataset, but this first run did not beat the contrastive or contrastive-plus-active baselines on retrieval or classification
+- MNRL plus active learning recovered Recall@5 to `0.8250`, but because the current MNRL path only trains on positive pairs, it could not exploit mined negative feedback as directly as contrastive loss
 
 That final tradeoff is the best fit for this toy retrieval-first pipeline.
 

@@ -377,12 +377,12 @@ d(q1, q2) = 1 - s(q1, q2)</code></pre>
             <span>Best overall tradeoff in this repo.</span>
           </div>
           <div class="experiment-row">
-            <span>Contrastive warm-start + aligned triplet</span>
-            <span>0.8430</span>
-            <span>0.8052</span>
-            <span>0.5975</span>
-            <span>0.8131</span>
-            <span>Better hard-negative alignment, but not a better system yet.</span>
+            <span>MNRL + active learning</span>
+            <span>0.7601</span>
+            <span>0.7361</span>
+            <span>0.6105</span>
+            <span>0.8250</span>
+            <span>Recovered retrieval after feedback mining, but still lagged badly on classification.</span>
           </div>
         </div>
         <div class="insight-grid">
@@ -395,8 +395,8 @@ d(q1, q2) = 1 - s(q1, q2)</code></pre>
             <p>MNRL delivered the strongest retrieval of the dense training losses, with Recall@1 of 0.6116 and MRR of 0.6956, but it produced too many false positives for final duplicate classification.</p>
           </article>
           <article class="insight-card">
-            <h3>What did not automatically improve</h3>
-            <p>Triplet training became more correct after aligning the mining anchors, but the first aligned run still failed to beat the best active-learning result.</p>
+            <h3>What MNRL active learning changed</h3>
+            <p>The MNRL active-learning retrain brought Recall@5 back to 0.8250, but because MNRL trains only on positive pairs in this repo, it could not use the mined negative feedback as directly as contrastive loss.</p>
           </article>
           <article class="insight-card">
             <h3>Why that matters</h3>
